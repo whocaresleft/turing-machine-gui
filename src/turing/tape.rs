@@ -1,7 +1,5 @@
 use super::definitions::{LSymbol, BLANK};
 
-const INITIAL_SIZE_GUESS: usize = 500;
-
 pub struct Tape {
 
     content: Vec<LSymbol>,
@@ -12,16 +10,12 @@ pub struct Tape {
 
 impl Tape {
 
-    pub fn new (extend_on_end: bool) -> Self {
-        Tape::with_size(INITIAL_SIZE_GUESS, extend_on_end)
-    }
-
     pub fn with_size(size: usize, extend_on_end: bool) -> Self {
-        let cnt: Vec<LSymbol> = vec![BLANK; size];
-        Tape::with_content(cnt, extend_on_end)
+        Tape::with_content(vec![BLANK; size], extend_on_end)
     }
 
     pub fn with_content(content: Vec<LSymbol>, extend_on_end: bool) -> Self {
+        let content = if content.is_empty() { vec![BLANK; 1] } else { content };
         Tape {
             content: content, 
             head: 0,
@@ -44,13 +38,13 @@ impl Tape {
     }
 
     pub fn move_dx(&mut self) -> Result<(), ()> {
+        self.head += 1;
         if self.head == self.content.len() {
             if !self.extend_on_end { return Err(()) }
             else {
                 self.content.push(BLANK);
             }
         }
-        self.head += 1;
         Ok(())
     }
 

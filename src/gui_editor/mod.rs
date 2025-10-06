@@ -12,3 +12,5 @@ pub trait Serializable {
 pub trait Deserializable {
     fn deserialize(from: &String) -> Result<Self, String> where Self: Sized;
 }
+
+use super::turing::{Computation, Alphabet, TuringMachine, Tape};

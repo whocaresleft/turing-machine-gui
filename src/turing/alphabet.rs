@@ -23,7 +23,7 @@ impl Alphabet {
     }
 
     pub fn add_symbol(&mut self, symbol: RSymbol) -> Result<(), ()> {
-        if self.r_to_l.contains_key(&symbol) { return Err(()) }
+        if self.r_to_l.contains_key(&symbol) { return Ok(()) }
         let current_count /* also new index */ = self.l_to_r.len() as u8;
 
         self.l_to_r.insert(current_count, symbol);
@@ -49,6 +49,15 @@ impl Alphabet {
     pub fn get_r_symbol(&self, l_key: &LSymbol) -> Option<RSymbol> {
         self.l_to_r.get(l_key).map(|r| *r)
     }
+
+    pub fn get_l_symbols(&self, r_keys: &[RSymbol]) -> Vec<Option<LSymbol>> {
+        r_keys.iter().map(|r| self.get_l_symbol(r)).collect()
+    }
+    pub fn get_r_symbols(&self, l_keys: &[LSymbol]) -> Vec<Option<RSymbol>> {
+        l_keys.iter().map(|l| self.get_r_symbol(l)).collect()
+    }
+
+    pub fn default_blank(&self) -> RSymbol { self.blank_r_symbol }
 
     pub fn len(&self) -> usize { self.l_to_r.len() }
 }

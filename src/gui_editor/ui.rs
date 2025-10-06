@@ -1,14 +1,18 @@
 use egui::{Color32, Pos2, Rect};
 
+use crate::turing;
+use crate::turing::computation::StepFeedback;
+
 use super::Deserializable;
 use super::Serializable;
 use super::node::Node;
 use super::arrow::Arrow;
 use super::drawable::Drawable;
 pub const FG: Color32 = Color32::from_rgb(0x00, 0x71, 0xEB);
+pub const FG_1: Color32 = Color32::from_rgb(0xF0, 0x2C, 0x2C);
 const BG: [Color32; 2] = [Color32::TRANSPARENT, Color32::from_rgb(0x25, 0x25, 0x25)];
-
-use std::sync::mpsc::Sender;
+use super::{Alphabet, Computation, TuringMachine, Tape};
+use std::sync::{Arc, Mutex};
 
 pub struct NodeEditor {
     dragging_arrow: Option<Arrow>,
@@ -24,11 +28,39 @@ pub struct NodeEditor {
     input: String,
     n_tapes: u8,
 
-    channel_sender: Sender<TMInfo>
+    initialized: bool,
+
+    is_paused: bool, 
+    has_started: bool,
+
+    def_blank: String,
+
+    outcome: Option<(bool, bool, String)>,
+
+    computations: (
+        Arc<Mutex<Computation<1>>>,
+        Arc<Mutex<Computation<2>>>,
+        Arc<Mutex<Computation<3>>>,
+    ),
+
+    popup_string: Option<String>,
+
+    can_continue: bool,
+
+    show_execution: bool,
+
+    rx: Option<std::sync::mpsc::Receiver<()>>,
+    can_reset: bool,
+
+    last_tape: Option<String>,
+
+    clear_outcome: Option<()>,
+
+    extend_tape_on_end: bool,
 }
 
 impl NodeEditor {
-    pub fn new(tx: Sender<TMInfo>) -> Self {
+    pub fn new() -> Self {
         NodeEditor {
             dragging_arrow: None,
             selected_node_id: None,
@@ -43,7 +75,32 @@ impl NodeEditor {
             n_tapes: 1,
             input: String::new(),
 
-            channel_sender: tx
+            initialized: false,
+            is_paused: false,
+            has_started: false,
+
+            def_blank: String::from('*'),
+            outcome: None,
+
+            computations: (
+                Arc::new(Mutex::new(Computation::<1>::new())),
+                Arc::new(Mutex::new(Computation::<2>::new())),
+                Arc::new(Mutex::new(Computation::<3>::new())),
+            ),
+
+            popup_string: None,
+            can_continue: true,
+
+            show_execution: false,
+
+            rx: None,
+            can_reset: true,
+
+            last_tape: None,
+
+            clear_outcome: None,
+
+            extend_tape_on_end: false,
         }
     }
 
@@ -76,7 +133,107 @@ impl NodeEditor {
         if arrow_id >= self.arrows.len() { return }
         self.arrows[arrow_id] = None;
     }
-    
+    fn dispatch_only_output(&mut self) -> Option<String> {
+        match self.n_tapes {
+            1 => {
+                if let Ok(mut mtx) = self.computations.0.try_lock() {
+                    if let Ok(out) = mtx.output_all() {
+                        Some(out)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+            2 => {
+                if let Ok(mut mtx) = self.computations.1.try_lock() {
+                    if let Ok(out) = mtx.output_all() {
+                        Some(out)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+            3 => {
+                if let Ok(mut mtx) = self.computations.2.try_lock() {
+                    if let Ok(out) = mtx.output_all() {
+                        Some(out)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
+            _ => panic!("Impossible")
+        }
+    }
+    fn dispatch_step(&mut self) -> Result<StepFeedback, String> {
+        match self.n_tapes {
+            1 => { self.computations.0.lock().unwrap().step() }
+            2 => { self.computations.1.lock().unwrap().step() }
+            3 => { self.computations.2.lock().unwrap().step() }
+            _ => panic!("Impossible")
+        }
+    }
+    fn dispatch_result(&mut self) -> Result<(bool, String), String> {
+        let (is_on_final_state, output_tapes) = match self.n_tapes {
+            1 => { 
+                let mut x = self.computations.0.lock().unwrap();
+                (x.is_on_final_state(), x.output_all())
+            }
+            2 => {
+                let mut x = self.computations.1.lock().unwrap();
+                (x.is_on_final_state(), x.output_all())
+            }
+            3 => {
+                let mut x = self.computations.2.lock().unwrap();
+                (x.is_on_final_state(), x.output_all())
+            }
+            _ => panic!("Impossible")
+        };
+        match output_tapes {
+            Ok(tapes) => Ok((is_on_final_state, tapes)),
+            Err(e) => Err(e)
+        }
+    }
+    fn dispatch_start(&mut self) -> Result<Option<std::sync::mpsc::Receiver<()>>, String> {
+        match self.n_tapes {
+            1 => { Computation::start(self.computations.0.clone()) }
+            2 => { Computation::start(self.computations.1.clone()) }
+            3 => { Computation::start(self.computations.2.clone()) }
+            _ => panic!("Impossible")
+        }
+    }
+    fn dispatch_pause(&mut self){
+        match self.n_tapes {
+            1 => { self.computations.0.lock().unwrap().pause(); }
+            2 => { self.computations.1.lock().unwrap().pause(); }
+            3 => { self.computations.2.lock().unwrap().pause(); }
+            _ => panic!("Impossible")
+        }
+    }
+    fn dispatch_resume(&mut self) {
+        match self.n_tapes {
+            1 => { self.computations.0.lock().unwrap().resume(); }
+            2 => { self.computations.1.lock().unwrap().resume(); }
+            3 => { self.computations.2.lock().unwrap().resume(); }
+            _ => panic!("Impossible")
+        }
+    }
+    fn dispatch_stop(&mut self) {
+        match self.n_tapes {
+            1 => { self.computations.0.lock().unwrap().stop(); }
+            2 => { self.computations.1.lock().unwrap().stop(); }
+            3 => { self.computations.2.lock().unwrap().stop(); }
+            _ => panic!("Impossible")
+        }
+    }
+
+
     pub fn insert_new_arrow(&mut self, mut arrow: Arrow) {
         let mut new_arrow_id = self.arrows.len();
         for (i, maybe_arrow) in self.arrows.iter().enumerate() {
@@ -130,28 +287,291 @@ impl NodeEditor {
         Ok(())
     }    
 
-    fn gather_all_information(&self) -> TMInfo {
-        let mut set = std::collections::HashSet::<char>::new();
+    fn continue_computation_with_1(&mut self) -> Result<(), ()> {
         let mut transitions = vec![];
-        for maybe_arrow in &self.arrows {
-            if let Some(arrow) = maybe_arrow {
-                for label in &arrow.labels {
-                    let mut chars = vec![];
-                    for char in label.chars() {
-                        if char != '/' {
-                            set.insert(char);
-                            chars.push(char);
+        let alphabet = {        
+            let mut set = std::collections::HashSet::<char>::new();
+            let mut x = Alphabet::new(self.def_blank.chars().next().unwrap_or(super::super::alphabet::DEFAULT_BLANK));
+            for maybe_arrow in &self.arrows {
+                if let Some(arrow) = maybe_arrow {
+                    for label in &arrow.labels {
+                        if label.len() != 3 { return Err(()) }
+                        let mut chars = vec![];
+                        for char in label.chars() {
+                            if char != '/' {
+                                set.insert(char);
+                                chars.push(char);
+                            }
                         }
+                        transitions.push(
+                            (
+                                arrow.id_from_node as u8,
+                                chars[0],
+                                chars[1],
+                                arrow.id_to_node.unwrap_or(0) as u8
+                            )
+                        );
                     }
-                    transitions.push((arrow.id_from_node as u8, chars[0], chars[1], arrow.id_to_node.unwrap_or(0) as u8));
+                }
+            }
+
+            for char in set.iter() {
+                if *char != 'L' && *char != 'R' {
+                    x.add_symbol(*char).ok();
+                }
+            }
+            x
+        };
+        let mut m = TuringMachine::<1>::new(self.nodes.len(), alphabet.len()).map_err(|_| ())?;
+        for node in &self.nodes {
+            if let Some(node) = node {
+                if node.is_final {
+                    m.add_final_state(node.id as u8).ok();
                 }
             }
         }
-        TMInfo {
-            n_states: self.nodes.len() as u8,
-            alphabet: set.iter().collect(),
-            input: self.input.clone(),
-            transitions: transitions,
+        let mut real_content = vec![];
+        for char in self.input.chars() {
+            real_content.push(
+                match char {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&char).unwrap_or(0),
+                }
+            );
+        }
+        for t in transitions {
+            let (q, x, a, t) = {
+                let x = match t.1 {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.1).unwrap_or(0),
+                };
+                let y = match t.2 {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.2).unwrap_or(0),
+                };
+                (t.0, [x], [y], t.3)
+            };
+            m.add_transition(q, x, a, t).ok();
+        }
+
+        if let Ok(mut mutex) = self.computations.0.lock() {
+            self.popup_string = Some("Test".to_owned());
+            mutex.reset();
+            mutex.use_alphabet(alphabet);
+            mutex.use_machine(m);
+            mutex.use_tapes([Tape::with_content(real_content, self.extend_tape_on_end)]);
+        }
+        self.initialized = true;
+        self.last_tape = Some(self.input.clone());
+        Ok(())
+    }
+
+    fn continue_computation_with_2(&mut self) -> Result<(), ()> {
+        let mut transitions = vec![];
+        let alphabet = {        
+            let mut set = std::collections::HashSet::<char>::new();
+            let mut x = Alphabet::new(self.def_blank.chars().next().unwrap_or(super::super::alphabet::DEFAULT_BLANK));
+            for maybe_arrow in &self.arrows {
+                if let Some(arrow) = maybe_arrow {
+                    for label in &arrow.labels {
+                        if label.len() != 5 { return Err(()) }
+                        let mut chars = vec![];
+                        for char in label.chars() {
+                            if char != '/' {
+                                set.insert(char);
+                                chars.push(char);
+                            }
+                        }
+                        transitions.push(
+                            (
+                                arrow.id_from_node as u8,
+                                [chars[0], chars[1]],
+                                [chars[2], chars[3]],
+                                arrow.id_to_node.unwrap_or(0) as u8
+                            )
+                        );
+                    }
+                }
+            }
+
+            for char in set.iter() {
+                if *char != 'L' && *char != 'R' {
+                    x.add_symbol(*char).ok();
+                }
+            }
+            x
+        };
+        let mut m = TuringMachine::<2>::new(self.nodes.len(), alphabet.len()).map_err(|_| ())?;
+        for node in &self.nodes {
+            if let Some(node) = node {
+                if node.is_final {
+                    m.add_final_state(node.id as u8).ok();
+                }
+            }
+        }
+        let mut real_content = vec![];
+        for char in self.input.chars() {
+            real_content.push(
+                match char {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&char).unwrap_or(0),
+                }
+            );
+        }
+        for t in transitions {
+            let (q, x, a, t) = {
+                let x1 = match t.1[0] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.1[0]).unwrap_or(0),
+                };
+                let x2 = match t.1[1] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.1[1]).unwrap_or(0),
+                };
+
+                let y1 = match t.2[0] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.2[0]).unwrap_or(0),
+                };
+                let y2 = match t.2[1] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.2[1]).unwrap_or(0),
+                };
+                (t.0, [x1, x2], [y1, y2], t.3)
+            };
+            m.add_transition(q, x, a, t).ok();
+        }
+
+        if let Ok(mut mutex) = self.computations.1.lock() {
+            self.popup_string = Some("Test".to_owned());
+            mutex.reset();
+            mutex.use_alphabet(alphabet);
+            mutex.use_machine(m);
+            let len = real_content.len();
+            mutex.use_tapes([Tape::with_content(real_content, self.extend_tape_on_end), Tape::with_size(len, self.extend_tape_on_end)]);
+        }
+        self.initialized = true;
+        self.last_tape = Some(self.input.clone());
+        Ok(())
+    }
+    fn continue_computation_with_3(&mut self) -> Result<(), ()> {
+        let mut transitions = vec![];
+        let alphabet = {        
+            let mut set = std::collections::HashSet::<char>::new();
+            let mut x = Alphabet::new(self.def_blank.chars().next().unwrap_or(super::super::alphabet::DEFAULT_BLANK));
+            for maybe_arrow in &self.arrows {
+                if let Some(arrow) = maybe_arrow {
+                    for label in &arrow.labels {
+                        if label.len() != 7 { return Err(()) }
+                        let mut chars = vec![];
+                        for char in label.chars() {
+                            if char != '/' {
+                                set.insert(char);
+                                chars.push(char);
+                            }
+                        }
+                        transitions.push(
+                            (
+                                arrow.id_from_node as u8,
+                                [chars[0], chars[1], chars[2]],
+                                [chars[3], chars[4], chars[5]],
+                                arrow.id_to_node.unwrap_or(0) as u8
+                            )
+                        );
+                    }
+                }
+            }
+
+            for char in set.iter() {
+                if *char != 'L' && *char != 'R' {
+                    x.add_symbol(*char).ok();
+                }
+            }
+            x
+        };
+        let mut m = TuringMachine::<3>::new(self.nodes.len(), alphabet.len()).map_err(|_| ())?;
+        for node in &self.nodes {
+            if let Some(node) = node {
+                if node.is_final {
+                    m.add_final_state(node.id as u8).ok();
+                }
+            }
+        }
+        let mut real_content = vec![];
+        for char in self.input.chars() {
+            real_content.push(
+                match char {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&char).unwrap_or(0),
+                }
+            );
+        }
+        for t in transitions {
+            let (q, x, a, t) = {
+                let x1 = match t.1[0] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.1[0]).unwrap_or(0),
+                };
+                let x2 = match t.1[1] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.1[1]).unwrap_or(0),
+                };
+                let x3 = match t.1[2] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.1[2]).unwrap_or(0),
+                };
+
+                let y1 = match t.2[0] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.2[0]).unwrap_or(0),
+                };
+                let y2 = match t.2[1] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.2[1]).unwrap_or(0),
+                };
+                let y3 = match t.2[2] {
+                    'L' => m.sx(),
+                    'R' => m.dx(),
+                    _ => alphabet.get_l_symbol(&t.2[2]).unwrap_or(0),
+                };
+                (t.0, [x1, x2, x3], [y1, y2, y3], t.3)
+            };
+            m.add_transition(q, x, a, t).ok();
+        }
+
+        if let Ok(mut mutex) = self.computations.2.lock() {
+            self.popup_string = Some("Test".to_owned());
+            mutex.reset();
+            mutex.use_alphabet(alphabet);
+            mutex.use_machine(m);
+            let len = real_content.len();
+            mutex.use_tapes([Tape::with_content(real_content, self.extend_tape_on_end), Tape::with_size(len, self.extend_tape_on_end), Tape::with_size(len, self.extend_tape_on_end)]);
+        }
+        self.initialized = true;
+        self.last_tape = Some(self.input.clone());
+        Ok(())
+    }
+
+    fn initialize_computation(&mut self) -> Result<(), ()> {
+        match self.n_tapes {
+            1 => self.continue_computation_with_1(),
+            2 => self.continue_computation_with_2(),
+            3 => self.continue_computation_with_3(),
+            _ => panic!("Impossible")
         }
     }
 }
@@ -181,20 +601,24 @@ impl super::Serializable for NodeEditor {
         result.push(']');
         result
     }
-
 }
 
-pub struct TMInfo {
-    pub n_states: u8,
-    pub alphabet: String,
-    pub transitions: Vec<(u8, char, char, u8)>,
-    pub input: String
-}
+
 
 impl eframe::App for NodeEditor {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+
+        if let Some(receiver) = &self.rx {
+            if let Ok(_) = receiver.try_recv() {
+                self.popup_string = Some("Computation terminated".to_owned());
+                self.can_continue = false;
+            }
+        }
+
         if let Some((i, j)) = self.to_remove_next_frame.take() { self.arrows[i].as_mut().unwrap().remove_label_by_index(j);}
+        if let Some(_) = self.clear_outcome { self.outcome.take(); }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let (size_x, size_y) = {
                 let size = ui.available_size_before_wrap();
@@ -204,7 +628,7 @@ impl eframe::App for NodeEditor {
 
                 // Buttons + editor
                 ui.group(|ui| {
-                    let size = egui::vec2(size_x * 0.73, size_y * 0.985);
+                    let size = egui::vec2(size_x * 0.73, size_y * 0.975);
                     ui.set_min_size(size);
 
                     ui.vertical(|ui| {
@@ -244,9 +668,14 @@ impl eframe::App for NodeEditor {
 
                                             ui.add_space(10.0);
 
-                                            ui.checkbox(&mut node.is_final, 
+                                            let response = ui.checkbox(&mut node.is_final, 
                                                 egui::RichText::new("Final").font(egui::FontId::monospace(20.0))
                                             );
+                                            if response.changed() {
+                                                self.can_reset = true;
+                                            }
+                                            if node.is_final { node.foreground_color =  FG_1 }
+                                            else { node.foreground_color = FG }
                                         });
                                     }
                                     ui.add_space(10.0);
@@ -305,29 +734,206 @@ impl eframe::App for NodeEditor {
                                         {
                                             if let Ok(file) = std::fs::File::open(path) {
                                                 self.from_serialized(file).ok();
-                                            } else { println!("ERROR file") }
+                                            } else { self.popup_string = Some("Could not open file".to_owned()); }
                                         }
                                     }
-                                    ui.group(|ui| {
-                                        ui.label(egui::RichText::new("Number of tapes: ").font(egui::FontId::monospace(20.0)));
-                                        egui::ComboBox::from_label("")
-                                            .selected_text(egui::RichText::new(format!("{:?}", self.n_tapes)).font(egui::FontId::monospace(20.0)))
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(&mut self.n_tapes, 1, egui::RichText::new("1").font(egui::FontId::monospace(20.0)));
-                                                ui.selectable_value(&mut self.n_tapes, 2, egui::RichText::new("2").font(egui::FontId::monospace(20.0)));
-                                                ui.selectable_value(&mut self.n_tapes, 3, egui::RichText::new("3").font(egui::FontId::monospace(20.0)));
-                                            }
-                                        );
-                                    });
-                                    if ui.add_sized([120.0, 40.0], egui::Button::new(
-                                        egui::RichText::new("Execute").font(egui::FontId::monospace(20.0))
-                                    )).clicked() {
-                                        let y = self.gather_all_information();
-                                        self.channel_sender.send(y).ok();
+                                    if !self.has_started {
+                                        ui.group(|ui| {
+                                            ui.vertical(|ui| {
+                                                egui::ScrollArea::vertical().id_salt(99).max_width(210.0).show(ui, |ui| {
+                                                    ui.set_max_width(200.0);
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new("Number of tapes").font(egui::FontId::monospace(20.0)));
+                                                        egui::ComboBox::from_id_salt(60)
+                                                            .selected_text(egui::RichText::new(format!("{}", self.n_tapes)).font(egui::FontId::monospace(20.0)))
+                                                            .show_ui(ui, |ui| {
+                                                                ui.selectable_value(&mut self.n_tapes, 1, egui::RichText::new("1").font(egui::FontId::monospace(20.0)));
+                                                                ui.selectable_value(&mut self.n_tapes, 2, egui::RichText::new("2").font(egui::FontId::monospace(20.0)));
+                                                                ui.selectable_value(&mut self.n_tapes, 3, egui::RichText::new("3").font(egui::FontId::monospace(20.0)));
+                                                            });
+                                                    });
+                                                    ui.separator();
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new("Blank symbol").font(egui::FontId::monospace(20.0)));
+                                                        ui.add(
+                                                            egui::TextEdit::singleline(&mut self.def_blank)
+                                                            .font(egui::FontId::monospace(20.0))
+                                                            .desired_width(20.0)
+                                                        );
+                                                    });
+                                                    ui.separator();
+                                                    ui.horizontal(|ui| {
+                                                        ui.checkbox(
+                                                            &mut self.extend_tape_on_end,
+                                                            egui::RichText::new("Extend tape on end").font(egui::FontId::monospace(20.0))
+                                                        );
+                                                    });
+                                                });
+                                                if self.def_blank.len() > 1 { self.def_blank.truncate(1); }
+                                            });
+                                        });
                                     }
+                                    if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                        egui::RichText::new(format!("{}", if !self.initialized { "Initialize" } else { "Reset" } )).font(egui::FontId::monospace(20.0))
+                                    )).clicked() {
+                                        if self.can_reset {
+                                            match self.initialize_computation() {
+                                                Err(_) => {
+                                                    self.popup_string = Some(String::from("Could not initialize"));
+                                                }
+                                                Ok(_) => {
+                                                    self.popup_string = Some(String::from("Initialization successful"));
+                                                    self.can_reset = false;
+                                                    self.can_continue = true;
+                                                    self.is_paused = false;
+                                                    self.has_started = false;
+                                                    self.outcome = None;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if self.initialized {
+
+                                        if self.can_continue {
+                                            if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                                egui::RichText::new("Step").font(egui::FontId::monospace(20.0))
+                                            )).clicked() {
+                                                self.can_reset = true;
+                                                match self.dispatch_step() {
+                                                    Ok(how) => {
+                                                        match how {
+                                                            turing::computation::StepFeedback::NeedToStop => { self.can_continue = false; self.popup_string = Some("Computation terminated".to_owned()) }
+                                                            _ => { }
+                                                        }
+                                                    },
+                                                    Err(e) => {
+                                                        self.popup_string = Some(e);
+                                                    }
+                                                }
+                                            } 
+
+                                            if !self.has_started {
+                                                if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                                    egui::RichText::new("Start").font(egui::FontId::monospace(20.0))
+                                                )).clicked() {
+                                                    self.can_reset = true;
+                                                    match self.dispatch_start() {
+                                                        Ok(maybe_rx) => {
+                                                            self.has_started = true;
+                                                            if let Some(rx) = maybe_rx {
+                                                                self.rx = Some(rx);
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            self.popup_string = Some(e);
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                if self.is_paused {
+                                                    if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                                        egui::RichText::new("Resume").font(egui::FontId::monospace(20.0))
+                                                    )).clicked() {
+                                                        self.dispatch_resume();
+                                                        self.is_paused = false;
+                                                    }
+                                                } else {
+                                                    if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                                        egui::RichText::new("Paused").font(egui::FontId::monospace(20.0))
+                                                    )).clicked() {
+                                                        self.dispatch_pause();
+                                                        self.is_paused = true;
+                                                    }
+                                                }
+                                                if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                                    egui::RichText::new("Stop").font(egui::FontId::monospace(20.0))
+                                                )).clicked() {
+                                                    self.dispatch_stop();
+                                                    self.can_continue = false;
+                                                }      
+                                            }
+
+                                        } else {
+                                            if ui.add_sized([120.0, 40.0], egui::Button::new(
+                                                egui::RichText::new("Get results").font(egui::FontId::monospace(20.0))
+                                            )).clicked() {
+                                                match self.dispatch_result() {
+                                                    Ok(x) => {
+                                                        self.outcome = Some(
+                                                            (x.0, !self.can_continue, x.1)
+                                                        );
+                                                    }
+                                                    Err(e) => self.popup_string = Some(e),
+                                                }
+                                            }
+                                        }                                            
+                                        ui.checkbox(&mut self.show_execution, egui::RichText::new("Show execution").font(egui::FontId::monospace(20.0)));
+                                    }
+                                }
+                                if let Some((is_on_final, terminated, output)) = &self.outcome {
+                                    egui::Window::new("Results window")
+                                        .collapsible(false)
+                                        .resizable(false)
+                                        .min_size(egui::vec2(400.0, 340.0))
+                                        .max_size(egui::vec2(400.0, 340.0))
+                                        .show(ui.ctx(), |ui| {
+                                            egui::ScrollArea::both().id_salt(2).max_height(340.0).max_width(400.0).show(ui, |ui| {
+                                                ui.vertical(|ui| {
+                                                    ui.label(egui::RichText::new(format!("{}erminated", if *terminated { "T" } else { "Not t" })).font(egui::FontId::monospace(20.0)));
+                                                    ui.label(egui::RichText::new(format!("Is{} on final state", if *is_on_final { "" } else { "n't" })).font(egui::FontId::monospace(20.0)));
+                                                    ui.separator();
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(format!("{}", output)).font(egui::FontId::monospace(20.0)));
+                                                    });
+                                                });
+                                            });
+                                            ui.separator();
+                                            if ui.button(egui::RichText::new("Close").font(egui::FontId::monospace(20.0))).clicked() {
+                                                self.clear_outcome = Some(());
+                                            }
+                                        });
+                                        ui.set_max_height(40.0);
+                                        ui.set_max_width(350.0);
                                 }
                             });
                         });
+                        if self.show_execution {
+                            egui::Window::new("Real time tape content")
+                                .collapsible(false)
+                                .resizable(true)
+                                .show(ui.ctx(), |ui| {
+                                    egui::ScrollArea::horizontal().id_salt(5).show(ui, |ui| {
+
+                                        let mut to_show: Option<String> = {
+                                            self.dispatch_only_output()
+                                        };
+                                        if let Some(_) = to_show {
+                                            // update last tape
+                                            self.last_tape = to_show.take();
+                                        }
+
+                                        ui.label(
+                                            egui::RichText::new(
+                                                self.last_tape.as_ref().unwrap_or(&"Could not get tape info".to_owned())
+                                            ).font(egui::FontId::monospace(20.0))
+                                        );
+                                    });
+                                });
+                        }
+                        if let Some(msg_str) = self.popup_string.take() {
+                            egui::Window::new("Message popup")
+                                .collapsible(false)
+                                .resizable(false)
+                                .show(ui.ctx(), |ui| {
+                                    ui.group(|ui| {
+                                        ui.label(egui::RichText::new(format!("{}", msg_str)).font(egui::FontId::monospace(20.0)));
+                                        if !ui.button(egui::RichText::new(format!("Ok")).font(egui::FontId::monospace(20.0))).clicked() {
+                                            self.popup_string = Some(msg_str);
+                                        }
+                                    });
+                                });
+                        }
                         ui.group( |ui| {
                             ui.set_min_size(egui::vec2(size.x * 0.99, y_2));
                             let group_rect = Rect::from_min_max(Pos2::new(25.0 ,y_1 + 45.0), Pos2::new(size.x * 0.99 + 15.0, y_1 + 40.0 + y_2));

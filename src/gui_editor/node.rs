@@ -13,7 +13,6 @@ pub struct Node {
 
     pub top_left: Pos2,
     pub foreground_color: Color32,
-    stroke: Stroke,
 
     pub is_final: bool,
 }
@@ -26,7 +25,6 @@ impl Node {
             top_left: starting_position,
             size: egui::vec2(100.0, 100.0),
             foreground_color: fg_color,
-            stroke: Stroke::new(2.5, fg_color),
 
             separate_header: separate_header,
 
@@ -79,7 +77,7 @@ impl Drawable for Node {
         );
 
         painter.rect_filled(whole_rect, 10, BACKGROUND_COLOR);
-        painter.rect_stroke(whole_rect, 10, self.stroke, StrokeKind::Inside);
+        painter.rect_stroke(whole_rect, 10, Stroke::new(2.5, self.foreground_color), StrokeKind::Inside);
         
         let label_position = whole_rect.center();
         painter.text(label_position, Align2::CENTER_CENTER, self.label.as_str(), FontId::monospace(15.0), TEXT_COLOR);
