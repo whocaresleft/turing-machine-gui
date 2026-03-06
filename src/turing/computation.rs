@@ -1,4 +1,6 @@
-use super::{Alphabet, Tape, TuringMachine, LSymbol};
+use crate::turing::BLANK_L_SYMBOL;
+
+use super::{Alphabet, Tape, TuringMachine, LSymbol, RSymbol, State};
 use std::sync::{
     Arc,
     Condvar,
@@ -6,7 +8,6 @@ use std::sync::{
     atomic::{
         AtomicBool,
         AtomicUsize,
-        AtomicU8,
         Ordering
     },
     mpsc::{
@@ -24,7 +25,7 @@ pub struct Computation<const K: usize> {
     tapes: Option<[Tape; K]>,
     m: Option<TuringMachine<K>>,
 
-    current: Arc<AtomicU8>,
+    current: Arc<AtomicUsize>,
     transition_count: Arc<AtomicUsize>,
 
     w: String,
@@ -52,7 +53,7 @@ impl<const K: usize> Computation<K> {
             tapes: None,
             m: None,
 
-            current: Arc::new(AtomicU8::new(0)),
+            current: Arc::new(AtomicUsize::new(0)),
             transition_count: Arc::new(AtomicUsize::new(0)),
 
             w: "".to_owned(),
@@ -112,9 +113,10 @@ impl<const K: usize> Computation<K> {
         let alpha = self.alphabet.as_ref().ok_or("An alphabet is needed!")?;
         let tapes = self.tapes.as_mut().ok_or("Tapes are needed")?;
         for r_symbol in self.w.chars() {
-            let l_symbol = alpha.get_l_symbol(&r_symbol).ok_or(format!("An error occurred between alphabet and input string, {} is not in the alphabet", r_symbol))?;
+            let r = RSymbol::Symbol(r_symbol);
+            let l_symbol = alpha.get_l_symbol(&r).ok_or(format!("An error occurred between alphabet and input string, {} is not in the alphabet", r_symbol))?;
             tapes[0].write(l_symbol);
-            for i in 1..K { tapes[i].write(super::BLANK); }
+            for i in 1..K { tapes[i].write(super::BLANK_L_SYMBOL); }
             for i in 0..K { tapes[i].move_dx().map_err(|_| format!("Can't move right on tape {}", i))?; }
         }
         Ok(())
@@ -128,7 +130,14 @@ impl<const K: usize> Computation<K> {
         let mut r_tape = String::with_capacity(tape.size() + 4 + tape.head_position());
         
         for r_symbol in r_symbols {
-            r_tape.push(r_symbol.unwrap_or(default));
+            r_tape.push(
+                {
+                    let r = r_symbol.unwrap_or(default);
+                    match r {
+                        RSymbol::Symbol(sym) => sym
+                    }
+                }
+            );
         }
         r_tape.push_str("...\n");
         for _ in 0..tape.head_position() {
@@ -271,9 +280,7 @@ impl<const K: usize> Computation<K> {
     pub fn is_on_final_state(&self) -> bool {
         if let Some(machine) = &self.m {
             let current = self.current.load(Ordering::SeqCst);
-            for node in machine.final_states_reference() {
-            }
-            machine.is_final_state(current).unwrap_or(false)
+            machine.is_final_state(State::State(current)).unwrap_or(false)
         } else {
             false
         }
@@ -284,11 +291,11 @@ impl<const K: usize> Computation<K> {
         let m = self.m.as_mut().ok_or("No machine")?;
         let tapes = self.tapes.as_mut().ok_or("No tapes")?;
 
-        let mut x: [LSymbol; K] = [0; K];
+        let mut x: [LSymbol; K] = [BLANK_L_SYMBOL; K];
         for i in 0..K {
             x[i] = tapes[i].read();
         }
-        let maybe_out = m.get_transition(self.current.load(Ordering::SeqCst), &x);
+        let maybe_out = m.get_transition(State::State(self.current.load(Ordering::SeqCst)), &x);
         if let Ok(out) = maybe_out {
             x = out.1;
             for i in 0..K {
@@ -302,7 +309,7 @@ impl<const K: usize> Computation<K> {
                     tapes[i].write(x[i]);
                 }
             }
-            self.current.store(out.0, Ordering::SeqCst);
+            self.current.store(match out.0 { State::State(s) => s }, Ordering::SeqCst);
 
             Ok(StepFeedback::CanContinue)
         } else {

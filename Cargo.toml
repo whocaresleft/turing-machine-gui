@@ -1,11 +1,9 @@
 [package]
-name = "turing-machine-gui"
+name = "tur"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-eframe = "0.32.3"
-egui = "0.32.3"
-rfd = "0.15.4"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+eframe = "0.33.3"
+egui = { version = "0.33.3", features = ["color-hex"]}
+rfd = "0.17.2"

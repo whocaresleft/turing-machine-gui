@@ -21,8 +21,8 @@ pub type FinalStateRemoveResult<T> = Result<T, Error>;
 
 pub struct TuringMachine <const K: usize>{
     
-    biggest_state_index: State,
-    biggest_symbol_index: LSymbol, // Up to 0xFD. biggest +1 (max 0xFE) is RIGHT >, biggest +2 (max 0xFF) is LEFT <
+    biggest_state_index: usize,
+    biggest_symbol_index: usize,
 
     final_states: std::collections::HashSet<State>,
 
@@ -37,12 +37,12 @@ impl<const K: usize> TuringMachine<K> {
             0x00 => return Err(Error::StateTooSmall),
             0x01..=0x100 => state_count - 1,
             _ => return Err(Error::StateTooBig),
-        } as u8;
+        };
         let biggest_symbol = match symbol_count {
             0x00 => return Err(Error::SymbolTooSmall),
-            0x01..=0xFE => symbol_count - 1,
+            0x01..=0x100 => symbol_count - 1,
             _ => return Err(Error::StateTooBig),
-        } as u8;
+        };
 
         Ok(TuringMachine {
             biggest_state_index: biggest_state,
@@ -53,10 +53,15 @@ impl<const K: usize> TuringMachine<K> {
     }
 
     pub fn add_transition(&mut self, q: State, x: [LSymbol; K], a: [LSymbol; K], t: State) -> TransitionInsertResult<()> {
-
+        let (q, t) = match (q, t) {
+            (State::State(q), State::State(t)) => (q, t)
+        };
         if q > self.biggest_state_index || t > self.biggest_state_index { return Err(Error::StateTooBig) }
 
-        for s in x { if s > self.biggest_symbol_index + 2 { return Err(Error::SymbolTooBig) } }
+        for s in x {
+            let s 
+            if s > self.biggest_symbol_index + 2 { return Err(Error::SymbolTooBig) }
+        }
         for s in a { if s > self.biggest_symbol_index + 2 { return Err(Error::SymbolTooBig) } }
 
         let (_in, _out) = ( (q, x), (t, a) );

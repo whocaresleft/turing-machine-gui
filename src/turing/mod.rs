@@ -1,12 +1,16 @@
-pub mod definitions;
-pub mod alphabet;
-pub mod tape;
-pub mod turing_machine;
-pub mod helper;
-pub mod computation;
+mod state;
+mod symbol;
+mod alphabet;
+mod tape;
 
-pub use alphabet::Alphabet;
-pub use tape::Tape;
-pub use turing_machine::TuringMachine;
-pub use definitions::{*};
-pub use computation::Computation;
+pub use self::{
+    state::State,
+    alphabet::Alphabet,
+    symbol::{
+        symbol::{Symbol},
+        l_symbol::{LSymbol, BLANK_L, LEFT_SHIFT, RIGHT_SHIFT},
+        r_symbol::RSymbol,
+    },
+};
+
+type Dimension = u64;

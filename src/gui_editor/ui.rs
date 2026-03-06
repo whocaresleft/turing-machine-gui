@@ -1,7 +1,9 @@
 use egui::{Color32, Pos2, Rect};
 
 use crate::turing;
+use crate::turing::alphabet::DEFAULT_BLANK_R;
 use crate::turing::computation::StepFeedback;
+use crate::turing::BLANK_L_SYMBOL;
 
 use super::Deserializable;
 use super::Serializable;
@@ -11,7 +13,7 @@ use super::drawable::Drawable;
 pub const FG: Color32 = Color32::from_rgb(0x00, 0x71, 0xEB);
 pub const FG_1: Color32 = Color32::from_rgb(0xF0, 0x2C, 0x2C);
 const BG: [Color32; 2] = [Color32::TRANSPARENT, Color32::from_rgb(0x25, 0x25, 0x25)];
-use super::{Alphabet, Computation, TuringMachine, Tape};
+use super::{Alphabet, Computation, TuringMachine, Tape, super::{State, LSymbol, RSymbol}};
 use std::sync::{Arc, Mutex};
 
 pub struct NodeEditor {
@@ -291,7 +293,13 @@ impl NodeEditor {
         let mut transitions = vec![];
         let alphabet = {        
             let mut set = std::collections::HashSet::<char>::new();
-            let mut x = Alphabet::new(self.def_blank.chars().next().unwrap_or(super::super::alphabet::DEFAULT_BLANK));
+            let mut x = Alphabet::new({
+                if let Some(r_char) = self.def_blank.chars().next() {
+                    RSymbol::Symbol(r_char)
+                } else {
+                    super::super::alphabet::DEFAULT_BLANK_R
+                }
+            });
             for maybe_arrow in &self.arrows {
                 if let Some(arrow) = maybe_arrow {
                     for label in &arrow.labels {
@@ -317,7 +325,7 @@ impl NodeEditor {
 
             for char in set.iter() {
                 if *char != 'L' && *char != 'R' {
-                    x.add_symbol(*char).ok();
+                    x.add_symbol(RSymbol::Symbol(*char)).ok();
                 }
             }
             x
@@ -326,7 +334,7 @@ impl NodeEditor {
         for node in &self.nodes {
             if let Some(node) = node {
                 if node.is_final {
-                    m.add_final_state(node.id as u8).ok();
+                    m.add_final_state(State::State(node.id)).ok();
                 }
             }
         }
@@ -336,7 +344,7 @@ impl NodeEditor {
                 match char {
                     'L' => m.sx(),
                     'R' => m.dx(),
-                    _ => alphabet.get_l_symbol(&char).unwrap_or(0),
+                    _ => alphabet.get_l_symbol(&&RSymbol::Symbol(char)).unwrap_or(BLANK_L_SYMBOL),
                 }
             );
         }
